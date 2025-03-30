@@ -1,0 +1,48 @@
+id: dataproc_run
+namespace: zoomcamp_dataset
+
+variables:
+  wd_table: "{{kv('GCP_PROJECT_ID')}}.{{kv('GCP_DATASET')}}.region_weekday"
+  we_table: "{{kv('GCP_PROJECT_ID')}}.{{kv('GCP_DATASET')}}.region_weekend"
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/dataproc/dataproc_wd.py"
+
+tasks:
+  - id: create_bigquery_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE TABLE IF NOT EXISTS `{{render(vars.wd_table)}}` (
+        nearest_region STRING,
+        hour_bin INT64,
+        adjusted_average_count FLOAT64
+      );
+
+  - id: create_bigquery_table_weekend
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE TABLE IF NOT EXISTS `{{render(vars.we_table)}}` (
+        nearest_region STRING,
+        hour_bin INT64,
+        adjusted_average_count FLOAT64
+      );
+
+  - id: py_spark_submit
+    type: io.kestra.plugin.gcp.dataproc.batches.PySparkSubmit
+    mainPythonFileUri: '{{render(vars.gcs_file)}}'
+    name: wd-pyspark
+    region: us-central1
+    serviceAccount: "{{kv('GCP_CREDS')}}"
+  
+pluginDefaults:
+- type: io.kestra.plugin.gcp
+  values:
+    serviceAccount: "{{kv('GCP_CREDS')}}"
+    projectId: "{{kv('GCP_PROJECT_ID')}}"
+    location: "{{kv('GCP_LOCATION')}}"
+    bucket: "{{kv('GCP_BUCKET_NAME')}}"
+
+triggers:
+  - id: every_day
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 12 * * *"
+    timezone: "Singapore"
+    recoverMissedSchedules: LAST

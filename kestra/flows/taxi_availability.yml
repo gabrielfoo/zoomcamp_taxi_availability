@@ -1,0 +1,140 @@
+id: taxi_availability
+namespace: zoomcamp_dataset
+
+variables:
+  datetime: "{{ trigger.date | date(\"yyyy-MM-dd'T'HH:mm:ss\", timeZone=\"Asia/Singapore\") }}"
+  file: "{{ trigger.date | date(\"yyyy-MM-dd'T'HH-mm-ss\", timeZone=\"Asia/Singapore\") }}.csv"
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.file}}"
+  table_name: "{{kv('GCP_PROJECT_ID')}}.{{kv('GCP_DATASET')}}.taxi"
+
+tasks:
+  - id: download_and_process
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    outputFiles:
+      - "{{render(vars.file)}}"
+    script: |
+      import requests
+      import pandas as pd
+      import math
+
+      centers = {
+        "Central": (1.2934316208919698, 103.82094352149458),
+        "West": (1.366241752952773, 103.73063462460611),
+        "North": (1.449970669388566, 103.79885182954719),
+        "North-East": (1.402160612496596, 103.88576200523725),
+        "East": (1.3456124345159386, 103.92654666868958)
+        }
+      def euclidean_distance(lat1, lon1, lat2, lon2):
+        return math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2)
+
+      url = f"https://api.data.gov.sg/v1/transport/taxi-availability?date_time={{render(vars.datetime)}}"
+      response = requests.get(url)
+      data = response.json()
+
+      coordinates = data['features'][0]['geometry']['coordinates']
+
+      rows = []
+      for lon, lat in coordinates:
+          # Calculate the distance to each center
+          distances = {key: euclidean_distance(lat, lon, center_lat, center_lon) for key, (center_lat, center_lon) in centers.items()}
+
+          nearest_center = min(distances, key=distances.get)
+
+          rows.append({
+              "longitude": lon,
+              "latitude": lat,
+              "location_string": f"{lat},{lon}",
+              "location": f"POINT({lon} {lat})",  
+              "insertion_time": "{{render(vars.datetime)}}", 
+              "nearest_region": nearest_center
+          })
+
+      # Convert to DataFrame
+      df = pd.DataFrame(rows)
+      df.to_csv("{{render(vars.file)}}", index=False)
+
+  - id: create_bigquery_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE TABLE IF NOT EXISTS `{{render(vars.table_name)}}` (
+        longitude FLOAT64,
+        latitude FLOAT64,
+        location_string STRING,
+        location GEOGRAPHY,
+        insertion_time TIMESTAMP,
+        nearest_region STRING
+      )
+      PARTITION BY DATE(insertion_time)
+      CLUSTER BY nearest_region;      
+
+  - id: upload_to_bq_table
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    script: |
+      from google.cloud import bigquery
+      from google.oauth2 import service_account
+      from kestra import Kestra
+
+      service_account_info = {{kv('GCP_CREDS')}}
+      credentials = service_account.Credentials.from_service_account_info(service_account_info)
+      client = bigquery.Client(credentials=credentials, project=service_account_info['project_id'])
+
+      with open('{{ outputs.download_and_process.outputFiles[render(vars.file)] }}', "rb") as source_file:
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.CSV,
+            skip_leading_rows=1, 
+            schema=[
+                bigquery.SchemaField("longitude", "FLOAT64"),
+                bigquery.SchemaField("latitude", "FLOAT64"),
+                bigquery.SchemaField("location_string", "STRING"),
+                bigquery.SchemaField("location", "GEOGRAPHY"),
+                bigquery.SchemaField("insertion_time", "TIMESTAMP"),
+                bigquery.SchemaField("nearest_region", "STRING"),
+            ],
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+        )
+        load_job = client.load_table_from_file(source_file, '{{render(vars.table_name)}}', job_config=job_config)
+
+      load_job.result()
+      if load_job.errors:
+        Kestra.outputs(f"Encountered errors while loading the table: {load_job.errors}")
+      else:
+        Kestra.outputs("Data appended successfully to BigQuery.")
+
+
+  - id: read_file_from_python
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - head -n 10 {{ outputs.download_and_process.outputFiles[render(vars.file)] }}
+      - echo {{render(vars.file)}}
+      - echo {{render(vars.datetime)}}
+
+  
+  - id: upload_to_gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    from: "{{ outputs.download_and_process.outputFiles[render(vars.file)] }}"
+    to: "{{render(vars.gcs_file)}}"
+
+  - id: purge_files
+    type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles
+    description: To avoid cluttering your storage, we will remove the downloaded files
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{kv('GCP_CREDS')}}"
+      projectId: "{{kv('GCP_PROJECT_ID')}}"
+      location: "{{kv('GCP_LOCATION')}}"
+      bucket: "{{kv('GCP_BUCKET_NAME')}}"
+
+triggers:
+  - id: every_15_min
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/15 * * * *"
+    timezone: "Singapore"
+    recoverMissedSchedules: ALL

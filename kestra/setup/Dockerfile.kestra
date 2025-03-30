@@ -1,0 +1,5 @@
+FROM kestra/kestra:latest
+USER root
+RUN apt-get update -y && apt-get install pip -y
+RUN pip install pandas requests kestra google-cloud-bigquery
+CMD ["server", "standalone"]
