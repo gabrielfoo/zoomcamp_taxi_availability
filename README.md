@@ -24,7 +24,8 @@ In Singapore, it can be challenging to find taxis in certain areas and at specif
 		- Looker Studio
 		
 0) **Infrastructure**: Terraform initialises the **entire** pipeline in the cloud for a 100% cloud solution.
-1) **Orchestration**: Kestra orchestrates the **entire** process, serving as the backbone of the end-to-end pipeline
+   
+1) **Orchestration**: Kestra orchestrates the **entire** process using multiple DAGs, serving as the backbone of the end-to-end pipeline.
 
 2) **Data Ingestion**: Taxi coordinates data is scraped every 15 minutes from https://api.data.gov.sg/v1/transport/taxi-availability using a Kestra workflow.
 
@@ -110,9 +111,10 @@ In Singapore, it can be challenging to find taxis in certain areas and at specif
 9. **Done!** Kestra pipeline is set to run automatically. Login using the username and password defined in application.yaml and variables.tf (should be the same). Check BigQuery dataset for output.
 
 ## Dashboard
+
 ![image](https://github.com/user-attachments/assets/322935e9-2e83-45de-9fab-82e12e8f212e)
 
-[Dashboard Link](https://lookerstudio.google.com/u/0/reporting/2933441c-ca35-4991-a2dd-983169fd7ecd)
+### [Dashboard Link](https://lookerstudio.google.com/u/0/reporting/2933441c-ca35-4991-a2dd-983169fd7ecd) (![#f03c15](https://placehold.co/15x15/f03c15/f03c15.png) **Click on the red "Selected Date" box in the Dashboard to filter by datetime.**) ###
 
 The dashboard provides a comprehensive view of taxi data in Singapore, split into two distinct sections for ease of analysis:
 
